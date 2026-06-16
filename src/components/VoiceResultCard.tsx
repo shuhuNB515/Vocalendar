@@ -13,9 +13,11 @@ interface VoiceResultCardProps {
 export default function VoiceResultCard({ response, onConfirm, onCancel }: VoiceResultCardProps) {
   const { createSchedule } = useScheduleStore();
   const [confirming, setConfirming] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const { intent, extracted, transcript } = response;
 
   const handleConfirm = async () => {
+    setErrorMsg(null);
     if (intent === 'create' && extracted.datetime) {
       setConfirming(true);
       try {
@@ -26,12 +28,15 @@ export default function VoiceResultCard({ response, onConfirm, onCancel }: Voice
           start_time: extracted.datetime,
           reminder_minutes: 15,
         });
-      } catch {
-        // 错误由 store 处理
+        setConfirming(false);
+        onConfirm();
+      } catch (e) {
+        setConfirming(false);
+        setErrorMsg((e as Error).message || '创建日程失败，请重试');
       }
-      setConfirming(false);
+    } else {
+      onConfirm();
     }
-    onConfirm();
   };
 
   return (
@@ -59,8 +64,15 @@ export default function VoiceResultCard({ response, onConfirm, onCancel }: Voice
       </div>
 
       {/* 解析结果 */}
-      {intent === 'create' && (
+      {(intent === 'create' || intent === 'unknown') && (
         <div className="space-y-2.5 mb-5">
+          {intent === 'unknown' && !extracted.title && !extracted.datetime && (
+            <div className="p-3 bg-[#FFF8E1] rounded-xl text-xs text-[#795548]">
+              {extracted.description
+                ? `解析失败：${extracted.description}`
+                : '未能识别您的意图。请尝试说："明天上午10点上课" 或 "我今天有什么安排？"'}
+            </div>
+          )}
           {extracted.title && (
             <div className="flex items-start gap-2">
               <CalendarDays className="w-4 h-4 text-[#1E3A5F] mt-0.5 flex-shrink-0" />
@@ -106,6 +118,13 @@ export default function VoiceResultCard({ response, onConfirm, onCancel }: Voice
         </div>
       )}
 
+      {/* 错误提示 */}
+      {errorMsg && (
+        <div className="mb-4 p-3 bg-[#FFEBEE] rounded-xl text-xs text-[#C62828] border border-[#FFCDD2]">
+          {errorMsg}
+        </div>
+      )}
+
       {/* 操作按钮 */}
       {response.confirm_required && (
         <div className="flex gap-3">
@@ -121,9 +140,10 @@ export default function VoiceResultCard({ response, onConfirm, onCancel }: Voice
           </button>
           <button
             onClick={onCancel}
+            disabled={confirming}
             className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl
               bg-[#E8EDF2] text-[#6B7B8D] font-medium
-              hover:bg-[#D5DFE9] transition-all"
+              hover:bg-[#D5DFE9] transition-all disabled:opacity-50"
           >
             <X className="w-4 h-4" />
             取消

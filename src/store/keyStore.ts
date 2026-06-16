@@ -1,26 +1,26 @@
 import { create } from 'zustand';
-import type { ApiKeyStatus } from '@/types';
+import type { ApiKeyStatus, ApiKeyConfig } from '@/types';
 import { keyApi } from '@/utils/api';
 
 interface KeyState {
   keyStatus: ApiKeyStatus;
-  asrKey: string;
-  nlpKey: string;
-  ttsKey: string;
+  config: ApiKeyConfig;
   loading: boolean;
   saving: boolean;
 
   fetchStatus: () => Promise<void>;
-  setKey: (type: 'asr' | 'nlp' | 'tts', value: string) => void;
+  setField: (field: keyof ApiKeyConfig, value: string) => void;
   saveKeys: () => Promise<void>;
-  testKey: (type: 'asr' | 'nlp' | 'tts') => Promise<string>;
+  testKey: () => Promise<string>;
 }
 
 export const useKeyStore = create<KeyState>((set, get) => ({
-  keyStatus: { asr_api_key_set: false, nlp_api_key_set: false, tts_api_key_set: false },
-  asrKey: '',
-  nlpKey: '',
-  ttsKey: '',
+  keyStatus: {
+    is_set: false,
+    api_url: undefined,
+    model_name: undefined,
+  },
+  config: {},
   loading: false,
   saving: false,
 
@@ -28,27 +28,31 @@ export const useKeyStore = create<KeyState>((set, get) => ({
     set({ loading: true });
     try {
       const status = await keyApi.getStatus();
-      set({ keyStatus: status, loading: false });
+      set({
+        keyStatus: status,
+        loading: false,
+        config: {
+          ...get().config,
+          api_url: status.api_url || get().config.api_url || '',
+          model_name: status.model_name || get().config.model_name || '',
+        },
+      });
     } catch {
       set({ loading: false });
     }
   },
 
-  setKey: (type, value) => {
-    if (type === 'asr') set({ asrKey: value });
-    else if (type === 'nlp') set({ nlpKey: value });
-    else set({ ttsKey: value });
+  setField: (field, value) => {
+    set((prev) => ({
+      config: { ...prev.config, [field]: value || undefined },
+    }));
   },
 
   saveKeys: async () => {
-    const { asrKey, nlpKey, ttsKey } = get();
+    const { config } = get();
     set({ saving: true });
     try {
-      const keys: Record<string, string> = {};
-      if (asrKey) keys.asr_api_key = asrKey;
-      if (nlpKey) keys.nlp_api_key = nlpKey;
-      if (ttsKey) keys.tts_api_key = ttsKey;
-      await keyApi.save(keys);
+      await keyApi.save(config);
       set({ saving: false });
       get().fetchStatus();
     } catch {
@@ -56,11 +60,11 @@ export const useKeyStore = create<KeyState>((set, get) => ({
     }
   },
 
-  testKey: async (type) => {
-    const { asrKey, nlpKey, ttsKey } = get();
-    const apiKey = type === 'asr' ? asrKey : type === 'nlp' ? nlpKey : ttsKey;
+  testKey: async () => {
+    const { config } = get();
+    if (!config.api_key) return '请先输入 API Key';
     try {
-      const res = await keyApi.test(type, apiKey);
+      const res = await keyApi.test(config as { api_url?: string; api_key: string; model_name?: string });
       return res.message;
     } catch (e) {
       return (e as Error).message;

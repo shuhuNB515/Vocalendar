@@ -64,15 +64,16 @@ class ScheduleOut(BaseModel):
 
 # 语音处理
 class VoiceProcessRequest(BaseModel):
-    audio_base64: str
-    api_keys: "ApiKeysInput"
+    audio_base64: Optional[str] = None
+    text_input: Optional[str] = None
+    api_config: Optional["ApiKeyConfig"] = None  # 统一的多模态 API 配置
     context: Optional["VoiceContext"] = None
 
 
-class ApiKeysInput(BaseModel):
-    asr_api_key: Optional[str] = None
-    nlp_api_key: Optional[str] = None
-    tts_api_key: Optional[str] = None
+class ApiKeyConfig(BaseModel):
+    api_url: Optional[str] = None
+    api_key: Optional[str] = None
+    model_name: Optional[str] = None
 
 
 class VoiceContext(BaseModel):
@@ -81,7 +82,7 @@ class VoiceContext(BaseModel):
 
 class VoiceProcessResponse(BaseModel):
     transcript: str
-    intent: str  # create, query, modify, delete, unknown
+    intent: str
     extracted: "ExtractedInfo"
     result: Optional["VoiceResult"] = None
     audio_response_base64: Optional[str] = None
@@ -101,22 +102,23 @@ class VoiceResult(BaseModel):
     deleted_ids: Optional[list[int]] = None
 
 
-# API Key
+# API Key（统一多模态配置）
 class SaveKeysRequest(BaseModel):
-    asr_api_key: Optional[str] = None
-    nlp_api_key: Optional[str] = None
-    tts_api_key: Optional[str] = None
+    api_url: Optional[str] = None
+    api_key: Optional[str] = None
+    model_name: Optional[str] = None
 
 
 class KeyStatusResponse(BaseModel):
-    asr_api_key_set: bool
-    nlp_api_key_set: bool
-    tts_api_key_set: bool
+    is_set: bool
+    api_url: Optional[str] = None
+    model_name: Optional[str] = None
 
 
 class TestKeyRequest(BaseModel):
-    key_type: str  # asr, nlp, tts
+    api_url: Optional[str] = None
     api_key: str
+    model_name: Optional[str] = None
 
 
 class TestKeyResponse(BaseModel):

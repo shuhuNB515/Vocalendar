@@ -32,14 +32,18 @@ export interface UpdateScheduleRequest {
   reminder_minutes?: number;
 }
 
+// API Key 配置（统一多模态）
+export interface ApiKeyConfig {
+  api_url?: string;
+  api_key?: string;
+  model_name?: string;
+}
+
 // 语音处理请求
 export interface VoiceProcessRequest {
-  audio_base64: string;
-  api_keys: {
-    asr_api_key?: string;
-    nlp_api_key?: string;
-    tts_api_key?: string;
-  };
+  audio_base64?: string;
+  text_input?: string;
+  api_config?: ApiKeyConfig;
   context?: {
     last_event_id?: number;
   };
@@ -66,9 +70,9 @@ export interface VoiceProcessResponse {
 
 // API Key 状态
 export interface ApiKeyStatus {
-  asr_api_key_set: boolean;
-  nlp_api_key_set: boolean;
-  tts_api_key_set: boolean;
+  is_set: boolean;
+  api_url?: string;
+  model_name?: string;
 }
 
 // 用户

@@ -9,7 +9,14 @@ import { useAuthStore } from '@/store/authStore';
 import { useEffect } from 'react';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated } = useAuthStore();
+  const { isAuthenticated, initialized } = useAuthStore();
+  if (!initialized) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#F0F4F8]">
+        <div className="w-10 h-10 border-2 border-[#1E3A5F] border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
   if (!isAuthenticated) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }

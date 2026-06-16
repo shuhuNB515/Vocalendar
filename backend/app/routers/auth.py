@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from passlib.context import CryptContext
+import bcrypt
 from jose import jwt, JWTError
 from datetime import datetime, timedelta
 import os
@@ -12,7 +12,6 @@ from ..schemas import LoginRequest, RegisterRequest, AuthResponse, UserOut
 
 router = APIRouter()
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 SECRET_KEY = os.getenv("SECRET_KEY", "vocalendar-secret-key-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24小时
@@ -28,10 +27,10 @@ def create_access_token(data: dict) -> str:
 def verify_token(token: str) -> int:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: int = payload.get("sub")
-        if user_id is None:
+        user_id_str = payload.get("sub")
+        if user_id_str is None:
             raise HTTPException(status_code=401, detail="无效的认证凭据")
-        return user_id
+        return int(user_id_str)
     except JWTError:
         raise HTTPException(status_code=401, detail="无效的认证凭据")
 
@@ -51,14 +50,14 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=400, detail="该邮箱已被注册")
 
     # 创建用户
-    password_hash = pwd_context.hash(req.password)
+    password_hash = bcrypt.hashpw(req.password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
     user = User(email=req.email, password_hash=password_hash)
     db.add(user)
     await db.commit()
     await db.refresh(user)
 
     # 生成 token
-    token = create_access_token({"sub": user.id})
+    token = create_access_token({"sub": str(user.id)})
     return AuthResponse(token=token, user=UserOut(id=user.id, email=user.email))
 
 
@@ -68,9 +67,9 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.email == req.email))
     user = result.scalar_one_or_none()
 
-    if not user or not pwd_context.verify(req.password, user.password_hash):
+    if not user or not bcrypt.checkpw(req.password.encode("utf-8"), user.password_hash.encode("utf-8")):
         raise HTTPException(status_code=401, detail="邮箱或密码错误")
 
     # 生成 token
-    token = create_access_token({"sub": user.id})
+    token = create_access_token({"sub": str(user.id)})
     return AuthResponse(token=token, user=UserOut(id=user.id, email=user.email))

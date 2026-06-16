@@ -2,8 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from cryptography.fernet import Fernet
-import base64
 import os
+import hashlib
+import base64
+
+import httpx
 
 from ..database import get_db
 from ..models import ApiKey
@@ -13,9 +16,20 @@ from ..routers.schedules import get_user_id
 
 router = APIRouter()
 
-# 加密密钥（生产环境应从环境变量读取）
-ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
-fernet = Fernet(ENCRYPTION_KEY.encode() if isinstance(ENCRYPTION_KEY, str) else ENCRYPTION_KEY)
+
+def _get_encryption_key() -> bytes:
+    """获取加密 key，确保每次启动使用相同的 key"""
+    env_key = os.getenv("ENCRYPTION_KEY")
+    if env_key:
+        return env_key.encode() if isinstance(env_key, str) else env_key
+    # 使用固定种子生成确定性的 key，确保重启后能解密
+    seed = "vocalendar-default-encryption-key-2024"
+    digest = hashlib.sha256(seed.encode()).digest()
+    return base64.urlsafe_b64encode(digest)
+
+
+ENCRYPTION_KEY = _get_encryption_key()
+fernet = Fernet(ENCRYPTION_KEY)
 
 
 def encrypt_key(key: str) -> str:
@@ -32,13 +46,19 @@ async def get_key_status(
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(ApiKey).where(ApiKey.user_id == user_id))
-    keys = result.scalars().all()
+    key_record = result.scalar_one_or_none()
 
-    key_types = {k.key_type for k in keys}
+    if not key_record:
+        return KeyStatusResponse(is_set=False)
+
+    url = key_record.api_url or None
+    if url and len(url) > 40:
+        url = url[:30] + "..."
+
     return KeyStatusResponse(
-        asr_api_key_set="asr" in key_types,
-        nlp_api_key_set="nlp" in key_types,
-        tts_api_key_set="tts" in key_types,
+        is_set=True,
+        api_url=url,
+        model_name=key_record.model_name or None,
     )
 
 
@@ -48,30 +68,26 @@ async def save_keys(
     user_id: int = Depends(get_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    key_map = {
-        "asr": req.asr_api_key,
-        "nlp": req.nlp_api_key,
-        "tts": req.tts_api_key,
-    }
+    if not req.api_key:
+        raise HTTPException(status_code=400, detail="API Key 不能为空")
 
-    for key_type, key_value in key_map.items():
-        if not key_value:
-            continue
+    result = await db.execute(select(ApiKey).where(ApiKey.user_id == user_id))
+    existing = result.scalar_one_or_none()
 
-        result = await db.execute(
-            select(ApiKey).where(ApiKey.user_id == user_id, ApiKey.key_type == key_type)
+    if existing:
+        existing.encrypted_key = encrypt_key(req.api_key)
+        if req.api_url is not None:
+            existing.api_url = req.api_url
+        if req.model_name is not None:
+            existing.model_name = req.model_name
+    else:
+        new_key = ApiKey(
+            user_id=user_id,
+            api_url=req.api_url,
+            encrypted_key=encrypt_key(req.api_key),
+            model_name=req.model_name,
         )
-        existing = result.scalar_one_or_none()
-
-        if existing:
-            existing.encrypted_key = encrypt_key(key_value)
-        else:
-            new_key = ApiKey(
-                user_id=user_id,
-                key_type=key_type,
-                encrypted_key=encrypt_key(key_value),
-            )
-            db.add(new_key)
+        db.add(new_key)
 
     await db.commit()
     return {"success": True}
@@ -83,41 +99,29 @@ async def test_key(
     user_id: int = Depends(get_user_id),
 ):
     try:
-        import httpx
+        api_url = (req.api_url or "https://api.openai.com/v1").rstrip("/")
+        # 必须指定模型名称，否则无法测试
+        if not req.model_name:
+            return TestKeyResponse(success=False, message="请填写模型名称后再测试")
 
-        if req.key_type == "nlp":
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {req.api_key}"},
-                    json={
-                        "model": "gpt-4o-mini",
-                        "messages": [{"role": "user", "content": "test"}],
-                        "max_tokens": 1,
-                    },
-                )
-                if response.status_code == 200:
-                    return TestKeyResponse(success=True, message="NLP API Key 验证成功")
-                else:
-                    return TestKeyResponse(success=False, message=f"验证失败: {response.status_code}")
+        model = req.model_name
 
-        elif req.key_type == "asr":
-            # 简单验证 - 尝试列出模型
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    "https://api.openai.com/v1/models",
-                    headers={"Authorization": f"Bearer {req.api_key}"},
-                )
-                if response.status_code == 200:
-                    return TestKeyResponse(success=True, message="ASR API Key 验证成功")
-                else:
-                    return TestKeyResponse(success=False, message=f"验证失败: {response.status_code}")
-
-        elif req.key_type == "tts":
-            return TestKeyResponse(success=True, message="TTS API Key 格式验证通过")
-
-        else:
-            return TestKeyResponse(success=False, message="未知的 Key 类型")
+        # 用 chat completions 测试连接
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.post(
+                f"{api_url}/chat/completions",
+                headers={"Authorization": f"Bearer {req.api_key}"},
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": "Hi"}],
+                    "max_tokens": 1,
+                },
+            )
+            if response.status_code == 200:
+                return TestKeyResponse(success=True, message=f"连接成功！模型: {model}")
+            else:
+                detail = response.text[:200]
+                return TestKeyResponse(success=False, message=f"连接失败 (HTTP {response.status_code}): {detail}")
 
     except Exception as e:
-        return TestKeyResponse(success=False, message=f"验证出错: {str(e)}")
+        return TestKeyResponse(success=False, message=f"连接出错: {str(e)}")

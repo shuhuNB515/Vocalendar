@@ -40,16 +40,16 @@ class ApiKey(Base):
     __tablename__ = "api_keys"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    key_type = Column(String(20), nullable=False)  # asr, nlp, tts
-    encrypted_key = Column(Text, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True)
+    api_url = Column(String(500), nullable=True)       # 多模态 API 地址
+    encrypted_key = Column(Text, nullable=False)        # 加密的 API Key
+    model_name = Column(String(100), nullable=True)     # 模型名称
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     user = relationship("User", back_populates="api_keys")
 
     __table_args__ = (
-        # 唯一约束：每个用户的每种 key 类型只能有一条记录
         {"sqlite_autoincrement": True},
     )
 

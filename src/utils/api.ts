@@ -71,14 +71,14 @@ export const voiceApi = {
 // API Key
 export const keyApi = {
   getStatus: () => request<import('@/types').ApiKeyStatus>('/keys'),
-  save: (keys: { asr_api_key?: string; nlp_api_key?: string; tts_api_key?: string }) =>
+  save: (config: { api_url?: string; api_key?: string; model_name?: string }) =>
     request<{ success: boolean }>('/keys', {
       method: 'POST',
-      body: JSON.stringify(keys),
+      body: JSON.stringify(config),
     }),
-  test: (keyType: string, apiKey: string) =>
+  test: (config: { api_url?: string; api_key: string; model_name?: string }) =>
     request<{ success: boolean; message: string }>('/keys/test', {
       method: 'POST',
-      body: JSON.stringify({ key_type: keyType, api_key: apiKey }),
+      body: JSON.stringify(config),
     }),
 };
