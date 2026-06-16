@@ -48,7 +48,6 @@ class ScheduleUpdate(BaseModel):
 
 class ScheduleOut(BaseModel):
     id: int
-    user_id: int
     title: str
     description: Optional[str] = None
     location: Optional[str] = None

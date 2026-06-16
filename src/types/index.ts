@@ -1,7 +1,6 @@
 // 日程事件
 export interface ScheduleEvent {
   id: number;
-  user_id: number;
   title: string;
   description?: string;
   location?: string;

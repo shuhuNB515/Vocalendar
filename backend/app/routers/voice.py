@@ -16,6 +16,17 @@ from ..routers.keys import decrypt_key
 
 logger = logging.getLogger("voice")
 
+# 复用 httpx 客户端，避免每次请求创建新连接
+_http_client: httpx.AsyncClient | None = None
+
+
+async def get_http_client() -> httpx.AsyncClient:
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(timeout=30)
+    return _http_client
+
+
 router = APIRouter()
 
 NLP_SYSTEM_PROMPT = """你是「言程」智能日程助手的 NLP 解析模块。用户会通过语音输入一段自然语言，你需要从中提取日程相关信息。
@@ -116,7 +127,7 @@ async def process_voice(
             result = VoiceResult(
                 events=[
                     ScheduleOut(
-                        id=e.id, user_id=e.user_id, title=e.title,
+                        id=e.id, title=e.title,
                         description=e.description, location=e.location,
                         start_time=e.start_time.isoformat(),
                         end_time=e.end_time.isoformat() if e.end_time else None,
@@ -127,10 +138,21 @@ async def process_voice(
                 ]
             )
 
-    except Exception as e:
-        logger.error(f"voice process 异常: {traceback.format_exc()}")
+    except (httpx.HTTPError, httpx.InvalidURL) as e:
+        # API 调用相关的预期异常，返回友好提示
+        logger.warning(f"API 调用异常: {e}")
         intent = "unknown"
-        extracted = ExtractedInfo(description=f"处理出错: {str(e)}")
+        extracted = ExtractedInfo(description=f"API 调用失败: {str(e)}")
+    except (ValueError, KeyError, json.JSONDecodeError) as e:
+        # 数据解析异常（如 datetime 格式错误、JSON 解析失败）
+        logger.error(f"数据解析异常: {traceback.format_exc()}")
+        intent = "unknown"
+        extracted = ExtractedInfo(description=f"数据格式异常: {str(e)}")
+    except Exception as e:
+        # 未预期的编程错误，记录完整堆栈但不暴露内部细节
+        logger.error(f"voice process 未预期异常: {traceback.format_exc()}")
+        intent = "unknown"
+        extracted = ExtractedInfo(description="处理出错，请稍后重试")
 
     return VoiceProcessResponse(
         transcript=transcript if transcript else "（未获取到文本）",
@@ -146,22 +168,22 @@ async def call_asr(audio_base64: str, config) -> str:
     audio_bytes = base64.b64decode(audio_base64)
     api_url = (config.api_url or "https://api.openai.com/v1").rstrip("/")
     api_key = config.api_key
-    model = config.model_name  # 必须由用户指定，无默认值
+    model = config.model_name
 
     if not model:
         raise Exception("未配置模型名称，请在设置中填写")
 
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{api_url}/audio/transcriptions",
-            headers={"Authorization": f"Bearer {api_key}"},
-            files={"file": ("audio.webm", audio_bytes, "audio/webm")},
-            data={"model": model, "language": "zh"},
-        )
-        if response.status_code == 200:
-            return response.json().get("text", "")
-        else:
-            raise Exception(f"ASR API 错误: {response.text}")
+    client = await get_http_client()
+    response = await client.post(
+        f"{api_url}/audio/transcriptions",
+        headers={"Authorization": f"Bearer {api_key}"},
+        files={"file": ("audio.webm", audio_bytes, "audio/webm")},
+        data={"model": model, "language": "zh"},
+    )
+    if response.status_code == 200:
+        return response.json().get("text", "")
+    else:
+        raise Exception(f"ASR API 错误: {response.text}")
 
 
 async def call_nlp(text: str, config) -> dict:
@@ -176,90 +198,90 @@ async def call_nlp(text: str, config) -> dict:
     if not model:
         raise Exception("未配置模型名称，请在设置中填写")
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(
-            f"{api_url}/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}"},
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": prompt},
-                    {"role": "user", "content": text},
-                ],
-                "temperature": 0.1,
-            },
-        )
-        if response.status_code != 200:
-            raise Exception(f"NLP API 错误 (HTTP {response.status_code}): {response.text[:200]}")
+    client = await get_http_client()
+    response = await client.post(
+        f"{api_url}/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={
+            "model": model,
+            "messages": [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": text},
+            ],
+            "temperature": 0.1,
+        },
+    )
+    if response.status_code != 200:
+        raise Exception(f"NLP API 错误 (HTTP {response.status_code}): {response.text[:200]}")
 
-        # 安全地解析响应，兼容各种返回格式
-        try:
-            resp_json = response.json()
-        except Exception as e:
-            raise Exception(f"NLP 响应不是有效 JSON: {str(e)}")
+    # 安全地解析响应，兼容各种返回格式
+    try:
+        resp_json = response.json()
+    except Exception as e:
+        raise Exception(f"NLP 响应不是有效 JSON: {str(e)}")
 
-        logger.info(f"[NLP] 原始响应: {str(resp_json)[:500]}")
+    logger.info(f"[NLP] 原始响应: {str(resp_json)[:500]}")
 
-        # 兼容多种响应结构
+    # 兼容多种响应结构
+    content = None
+    try:
+        # 标准 OpenAI 格式: choices[0].message.content
+        if isinstance(resp_json, dict):
+            choices = resp_json.get("choices")
+            if isinstance(choices, list) and len(choices) > 0:
+                message = choices[0].get("message", {}) if isinstance(choices[0], dict) else {}
+                content = message.get("content")
+            # 某些 API 可能直接返回 content
+            if content is None:
+                content = resp_json.get("content") or resp_json.get("output") or resp_json.get("result")
+    except Exception:
         content = None
-        try:
-            # 标准 OpenAI 格式: choices[0].message.content
-            if isinstance(resp_json, dict):
-                choices = resp_json.get("choices")
-                if isinstance(choices, list) and len(choices) > 0:
-                    message = choices[0].get("message", {}) if isinstance(choices[0], dict) else {}
-                    content = message.get("content")
-                # 某些 API 可能直接返回 content
-                if content is None:
-                    content = resp_json.get("content") or resp_json.get("output") or resp_json.get("result")
-        except Exception:
-            content = None
 
-        if content is None:
-            raise Exception(f"NLP 响应结构异常，无法提取 content: {str(resp_json)[:200]}")
+    if content is None:
+        raise Exception(f"NLP 响应结构异常，无法提取 content: {str(resp_json)[:200]}")
 
-        # content 可能是字符串、dict 或 list
-        if isinstance(content, dict):
-            logger.info(f"[NLP] content 是 dict，直接使用: {str(content)[:200]}")
-            return content
+    # content 可能是字符串、dict 或 list
+    if isinstance(content, dict):
+        logger.info(f"[NLP] content 是 dict，直接使用: {str(content)[:200]}")
+        return content
 
-        if isinstance(content, list):
-            if content and isinstance(content[0], dict):
-                content = content[0].get("text") or str(content[0])
-            else:
-                content = str(content)
-
-        if not isinstance(content, str):
+    if isinstance(content, list):
+        if content and isinstance(content[0], dict):
+            content = content[0].get("text") or str(content[0])
+        else:
             content = str(content)
 
-        # 清理 markdown 代码块标记
-        content = content.strip()
-        logger.info(f"[NLP] 清理前 content: {content[:300]}")
+    if not isinstance(content, str):
+        content = str(content)
 
-        if content.startswith("```"):
-            lines = content.split("\n")
-            lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            content = "\n".join(lines).strip()
+    # 清理 markdown 代码块标记
+    content = content.strip()
+    logger.info(f"[NLP] 清理前 content: {content[:300]}")
 
-        # 尝试解析 JSON
-        try:
-            result = json.loads(content)
-            if isinstance(result, dict):
-                logger.info(f"[NLP] 解析成功: intent={result.get('intent')}")
-                return result
-            return {"intent": "unknown", "description": f"NLP 返回非对象: {str(result)[:100]}"}
-        except json.JSONDecodeError:
-            import re
-            match = re.search(r'\{[^{}]*\}', content, re.DOTALL)
-            if match:
-                try:
-                    result = json.loads(match.group())
-                    if isinstance(result, dict):
-                        logger.info(f"[NLP] 正则解析成功: intent={result.get('intent')}")
-                        return result
-                except json.JSONDecodeError:
-                    pass
-            logger.warning(f"[NLP] JSON 解析失败，原始内容: {content[:200]}")
-            return {"intent": "unknown", "description": f"NLP 返回内容无法解析: {content[:100]}"}
+    if content.startswith("```"):
+        lines = content.split("\n")
+        lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        content = "\n".join(lines).strip()
+
+    # 尝试解析 JSON
+    try:
+        result = json.loads(content)
+        if isinstance(result, dict):
+            logger.info(f"[NLP] 解析成功: intent={result.get('intent')}")
+            return result
+        return {"intent": "unknown", "description": f"NLP 返回非对象: {str(result)[:100]}"}
+    except json.JSONDecodeError:
+        import re
+        match = re.search(r'\{[^{}]*\}', content, re.DOTALL)
+        if match:
+            try:
+                result = json.loads(match.group())
+                if isinstance(result, dict):
+                    logger.info(f"[NLP] 正则解析成功: intent={result.get('intent')}")
+                    return result
+            except json.JSONDecodeError:
+                pass
+        logger.warning(f"[NLP] JSON 解析失败，原始内容: {content[:200]}")
+        return {"intent": "unknown", "description": f"NLP 返回内容无法解析: {content[:100]}"}

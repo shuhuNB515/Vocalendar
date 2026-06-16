@@ -34,6 +34,9 @@ export default function VoiceResultCard({ response, onConfirm, onCancel }: Voice
         setConfirming(false);
         setErrorMsg((e as Error).message || '创建日程失败，请重试');
       }
+    } else if (intent === 'modify' || intent === 'delete') {
+      // modify/delete 意图暂未实现，提示用户
+      setErrorMsg(`${intent === 'modify' ? '修改' : '删除'}日程功能正在开发中，请先在日程管理页面手动操作`);
     } else {
       onConfirm();
     }

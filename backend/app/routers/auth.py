@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import bcrypt
 from jose import jwt, JWTError
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
+import sys
 
 from ..database import get_db
 from ..models import User
@@ -12,14 +13,18 @@ from ..schemas import LoginRequest, RegisterRequest, AuthResponse, UserOut
 
 router = APIRouter()
 
-SECRET_KEY = os.getenv("SECRET_KEY", "vocalendar-secret-key-change-in-production")
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    print("[WARNING] SECRET_KEY 环境变量未设置，使用默认值（仅限开发环境）", file=sys.stderr)
+    SECRET_KEY = "vocalendar-secret-key-change-in-production"
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24小时
 
 
 def create_access_token(data: dict) -> str:
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -33,13 +38,6 @@ def verify_token(token: str) -> int:
         return int(user_id_str)
     except JWTError:
         raise HTTPException(status_code=401, detail="无效的认证凭据")
-
-
-async def get_current_user_id(token: str = None) -> int:
-    """从请求头获取当前用户 ID"""
-    if not token:
-        raise HTTPException(status_code=401, detail="未提供认证凭据")
-    return verify_token(token)
 
 
 @router.post("/register", response_model=AuthResponse)

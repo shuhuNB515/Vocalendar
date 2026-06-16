@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from ..database import get_db
-from ..models import Schedule, User
+from ..models import Schedule
 from ..schemas import ScheduleCreate, ScheduleUpdate, ScheduleOut
 from ..routers.auth import verify_token
 
@@ -45,7 +45,6 @@ async def list_schedules(
     return [
         ScheduleOut(
             id=s.id,
-            user_id=s.user_id,
             title=s.title,
             description=s.description,
             location=s.location,
@@ -80,7 +79,6 @@ async def create_schedule(
 
     return ScheduleOut(
         id=schedule.id,
-        user_id=schedule.user_id,
         title=schedule.title,
         description=schedule.description,
         location=schedule.location,
@@ -117,7 +115,6 @@ async def update_schedule(
 
     return ScheduleOut(
         id=schedule.id,
-        user_id=schedule.user_id,
         title=schedule.title,
         description=schedule.description,
         location=schedule.location,

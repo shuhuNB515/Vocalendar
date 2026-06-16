@@ -40,14 +40,14 @@ export const useAuthStore = create<AuthState>((set) => ({
     const res = await authApi.login(email, password);
     localStorage.setItem('token', res.token);
     localStorage.setItem('user', JSON.stringify(res.user));
-    set({ token: res.token, user: res.user, isAuthenticated: true });
+    set({ token: res.token, user: res.user, isAuthenticated: true, initialized: true });
   },
 
   register: async (email, password) => {
     const res = await authApi.register(email, password);
     localStorage.setItem('token', res.token);
     localStorage.setItem('user', JSON.stringify(res.user));
-    set({ token: res.token, user: res.user, isAuthenticated: true });
+    set({ token: res.token, user: res.user, isAuthenticated: true, initialized: true });
   },
 
   logout: () => {

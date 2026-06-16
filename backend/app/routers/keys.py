@@ -5,6 +5,7 @@ from cryptography.fernet import Fernet
 import os
 import hashlib
 import base64
+import sys
 
 import httpx
 
@@ -23,6 +24,7 @@ def _get_encryption_key() -> bytes:
     if env_key:
         return env_key.encode() if isinstance(env_key, str) else env_key
     # 使用固定种子生成确定性的 key，确保重启后能解密
+    print("[WARNING] ENCRYPTION_KEY 环境变量未设置，使用默认加密密钥（仅限开发环境）", file=sys.stderr)
     seed = "vocalendar-default-encryption-key-2024"
     digest = hashlib.sha256(seed.encode()).digest()
     return base64.urlsafe_b64encode(digest)
@@ -70,6 +72,12 @@ async def save_keys(
 ):
     if not req.api_key:
         raise HTTPException(status_code=400, detail="API Key 不能为空")
+    if len(req.api_key) > 256:
+        raise HTTPException(status_code=400, detail="API Key 长度不能超过 256 个字符")
+    if req.api_url and len(req.api_url) > 500:
+        raise HTTPException(status_code=400, detail="API URL 长度不能超过 500 个字符")
+    if req.model_name and len(req.model_name) > 100:
+        raise HTTPException(status_code=400, detail="模型名称长度不能超过 100 个字符")
 
     result = await db.execute(select(ApiKey).where(ApiKey.user_id == user_id))
     existing = result.scalar_one_or_none()
