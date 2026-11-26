@@ -137,6 +137,17 @@ cd backend
 uvicorn app.main:app --reload --port 8000
 ```
 
+### 后端日期筛选回归测试
+
+安装后端依赖后运行：
+
+```bash
+cd backend
+python -m unittest discover -s tests -v
+```
+
+测试使用临时内存数据库，覆盖非法日期、查询上界溢出、日/周边界、用户隔离及未登录请求，不调用外部 AI 服务。
+
 ### API Key 配置
 
 启动后在 **设置页面** 中配置以下 API Key（通过前端传入后端加密存储）：

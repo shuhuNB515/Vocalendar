@@ -29,14 +29,17 @@ async def list_schedules(
     query = select(Schedule).where(Schedule.user_id == user_id)
 
     if date:
-        target_date = datetime.fromisoformat(date)
-        if range == "week":
-            start = target_date - timedelta(days=target_date.weekday())
-            end = start + timedelta(days=7)
-            query = query.where(and_(Schedule.start_time >= start, Schedule.start_time < end))
-        else:
-            next_day = target_date + timedelta(days=1)
-            query = query.where(and_(Schedule.start_time >= target_date, Schedule.start_time < next_day))
+        try:
+            target_date = datetime.fromisoformat(date)
+            if range == "week":
+                start = target_date - timedelta(days=target_date.weekday())
+                end = start + timedelta(days=7)
+            else:
+                start = target_date
+                end = start + timedelta(days=1)
+        except (ValueError, OverflowError):
+            raise HTTPException(status_code=422, detail="日期无效或超出支持的查询范围")
+        query = query.where(and_(Schedule.start_time >= start, Schedule.start_time < end))
 
     query = query.order_by(Schedule.start_time)
     result = await db.execute(query)
